@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+from math import nan
+import sys
+import matplotlib as _
+import matplotlib.pyplot as plt
+import re
+import argparse
+import time
+
+
+class Plotter:
+    def __init__(
+        self,
+        plot,
+        window: int,
+        refresh: float,
+        *,
+        regex: str = None,
+        column: int = None,
+    ) -> None:
+        self.refresh = refresh
+        self.window = window
+        if regex:
+            self.exp = re.compile(regex)
+        else:
+            self.exp = None
+            self.column = column
+        self.plot = plot
+        self.first = True
+        self.nsamples = 0
+        self.data = []
+        self.title = None
+
+    def add_line(self, line: "list[str]", add_points: bool = False) -> bool:
+        needplot = self.first
+        now = time.monotonic()
+        if self.exp:
+            m = self.exp.fullmatch(line[0])
+            if not m:
+                return False
+            raw_value = m.group(1)
+        else:
+            try:
+                raw_value = line[self.column - 1]
+            except IndexError:
+                raw_value = ""
+        try:
+            new_value = float(raw_value)
+        except ValueError:
+            # If the value is not valid:
+            # Set the non-empty value as the title, if it was not previously set
+            if not self.title and raw_value:
+                self.title = raw_value
+                self.plot.set_label(self.title)
+            # Copy previous value if the line is not set as a title-line
+            if add_points:
+                new_value = 0.0 if self.first else self.data[-1]
+        if not add_points:
+            return False
+        if self.first:
+            self.data = [new_value] * self.window
+            self.first = False
+            self.last_plot = now
+        else:
+            self.data = self.data[1:] + [new_value]
+        self.nsamples += 1
+        self.plot.set_ydata(self.data)
+        if now - self.last_plot >= self.refresh:
+            needplot = True
+        if needplot:
+            self.last_plot = now
+        return needplot
+
+    def get_nsamples(self) -> int:
+        return self.nsamples
+
+    def shift_samples(self, keep: int) -> None:
+        if keep > len(self.data):
+            return
+        self.data = self.data[-keep:] + [self.data[-1]] * (self.window - keep)
+        self.plot.set_ydata(self.data)
+
+    def min(self) -> float:
+        if self.first:
+            return nan
+        return min(self.data)
+
+    def max(self) -> float:
+        if self.first:
+            return nan
+        return max(self.data)
+
+
+class Figure:
+    def __init__(
+        self,
+        title: str,
+        columns: "list[str]",
+        args: argparse.Namespace,
+    ) -> None:
+        self.autoscale = not args.no_auto
+        self.mem = not args.no_auto_memory
+        self.first_min = args.min is None
+        self.min = args.min
+        self.first_max = args.max is None
+        self.max = args.max
+        self.args = args
+        self.fig = plt.figure()
+        if title:
+            self.fig.suptitle(title)
+        self.columns = columns
+        self.ax = self.fig.add_subplot()
+        if args.no_auto or args.min and args.max:
+            self.ax.set_ylim([args.min, args.max])
+        self.plotters = []
+
+    def is_title_line(self, line: "list[str]") -> bool:
+        # If regexes are given, we don't have title lines
+        if self.args.plot:
+            return False
+        idx = 0
+        for v in line:
+            idx += 1
+            if self.columns and not idx in self.columns:
+                continue
+            try:
+                _ = float(v)
+                return False
+            except ValueError:
+                pass
+        return True
+
+    def _xsv_init(self, line: "list[str]") -> None:
+        idx = 0
+        for v in line:
+            idx += 1
+            if self.columns and not idx in self.columns:
+                continue
+            (plot,) = self.ax.plot(range(self.args.window), [0.0] * self.args.window)
+            plot.set_label(f"column {idx}")
+            self.plotters.append(
+                Plotter(
+                    plot,
+                    self.args.window,
+                    self.args.refresh_time,
+                    column=idx,
+                )
+            )
+        self.ax.legend()
+
+    def init(self, line: "list[str]") -> None:
+        if self.plotters:
+            return
+        if not self.args.plot:
+            # If no regexes are given, go into SSV/CSV mode
+            return self._xsv_init(line)
+        # Otherwise, use the given regexes
+        idx = 0
+        for p in self.args.plot:
+            idx += 1
+            if self.columns and not idx in self.columns:
+                continue
+            (plot,) = self.ax.plot(
+                range(self.args.window), [0.0] * self.args.window, label=p
+            )
+            self.plotters.append(
+                Plotter(plot, self.args.window, self.args.refresh_time, regex=p)
+            )
+        self.ax.legend()
+        return True
+
+    def update(self, line: "list[str]", add_points: bool = True) -> bool:
+        need_draw = False
+        for p in self.plotters:
+            need_draw |= p.add_line(line, add_points)
+        if need_draw:
+            self.draw()
+
+    def draw(self, strip: bool = False) -> None:
+        if not self.plotters:
+            return
+        if strip:
+            max_nsamples = max((p.get_nsamples() for p in self.plotters))
+            if max_nsamples < self.args.window:
+                for p in self.plotters:
+                    p.shift_samples(max_nsamples)
+                self.ax.set_xlim([0, max_nsamples - 1])
+        if self.autoscale:
+            update_scale = False
+            p_scale_min = min((p.min() for p in self.plotters))
+            p_scale_max = max((p.max() for p in self.plotters))
+            if not self.mem:
+                self.min = p_scale_min
+                self.max = p_scale_max
+                update_scale = True
+            else:
+                if self.first_min or p_scale_min < self.min:
+                    self.min = p_scale_min
+                    update_scale = True
+                    self.first_min = False
+                if self.first_max or p_scale_max > self.max:
+                    self.max = p_scale_max
+                    update_scale = True
+                    self.first_max = False
+            if update_scale and self.min != self.max:
+                self.ax.set_ylim([self.min, self.max])
+        self.ax.legend()
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+
+
+class Graph:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+        self.figures = []
+        self.filter = re.compile(args.filter) if args.filter else None
+
+        plt.ion()
+        for col_list in args.columns:
+            self.figures.append(Figure(args.title, col_list, args))
+
+    def _split_line(self, line: str) -> "list[str]":
+        if self.args.plot:
+            # In regex mode, do not split
+            values = [line]
+        elif self.args.csv:
+            # In CSV mode, use the given separator
+            values = line.split(self.args.csv)
+            values = [v.strip() for v in values]
+        else:
+            # Otherwise, read space-separated values
+            values = line.split()
+        return values
+
+    def _is_title_line(self, line: str) -> bool:
+        return all((f.is_title_line(line) for f in self.figures))
+
+    def update(self, line: str) -> bool:
+        if self.filter:
+            m = self.filter.fullmatch(line)
+            if not m:
+                return
+            line = m.group(1)
+        line = self._split_line(line)
+        for f in self.figures:
+            f.init(line)
+        is_title = self._is_title_line(line)
+        for f in self.figures:
+            f.update(line, not is_title)
+
+    def draw(self, strip: bool = False) -> None:
+        for f in self.figures:
+            f.draw(strip)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser("liveplot")
+    parser.add_argument("-t", "--title", help="Graph title")
+    parser.add_argument(
+        "plot",
+        nargs="*",
+        help="Plot definitions. A plot is defined by a regex applied to stdin. "
+        "The regex must have the plotted value available as a floating-point compatible value in its first capturing group. "
+        "Multiple plots may be given. If nothing is given, then the program will operate on SSV/CSV mode",
+    )
+    parser.add_argument(
+        "-w",
+        "--window",
+        type=int,
+        default=500,
+        help="Window size (the last N values will be printed, defaults to 500)",
+    )
+    parser.add_argument(
+        "-r",
+        "--refresh-time",
+        type=float,
+        default=0.1,
+        help="Refresh the plot at most every N seconds",
+    )
+    parser.add_argument("-m", "--min", type=float, help="Minimum value for the graph")
+    parser.add_argument("-M", "--max", type=float, help="Maximum value for the graph")
+    parser.add_argument(
+        "--no-auto", action="store_true", help="Disable auto-adjusting of range"
+    )
+    parser.add_argument(
+        "--no-auto-memory", action="store_true", help="Disable memory for auto-adjust"
+    )
+    parser.add_argument(
+        "--csv",
+        help="Input is in CSV format (if no separator is given, it is assumed to be ',')",
+        metavar="SEPARATOR",
+        nargs="?",
+        const=",",
+    )
+    parser.add_argument(
+        "--columns",
+        help="In SSC/CSV mode, display only those columns",
+        action="append",
+        nargs="+",
+        type=int,
+    )
+    parser.add_argument(
+        "-f",
+        "--filter",
+        help="Input filter regex. If given only the first capturing group of lines matching the regexp will be processed",
+    )
+
+    args = parser.parse_args()
+    if not args.columns:
+        args.columns = [[]]
+
+    graph = Graph(args)
+    while True:
+        line = sys.stdin.readline().strip()
+        if not line:
+            # Force a last draw
+            graph.draw(strip=True)
+            break
+        graph.update(line)
+    # Let the user manipulate the plot when done
+    plt.show(block=True)
+
+
+if __name__ == "__main__":
+    main()

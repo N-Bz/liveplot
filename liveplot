@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import re
 import argparse
 import time
+from collections import deque
 
 
 class Plotter:
@@ -28,7 +29,7 @@ class Plotter:
         self.plot = plot
         self.first = True
         self.nsamples = 0
-        self.data = []
+        self.data = None
         self.title = None
 
     def add_line(self, line: "list[str]", add_points: bool = False) -> bool:
@@ -58,11 +59,11 @@ class Plotter:
         if not add_points:
             return False
         if self.first:
-            self.data = [new_value] * self.window
+            self.data = deque([new_value] * self.window, self.window)
             self.first = False
             self.last_plot = now
         else:
-            self.data = self.data[1:] + [new_value]
+            self.data.append(new_value)
         self.nsamples += 1
         self.plot.set_ydata(self.data)
         if now - self.last_plot >= self.refresh:
@@ -77,7 +78,7 @@ class Plotter:
     def shift_samples(self, keep: int) -> None:
         if keep > len(self.data):
             return
-        self.data = self.data[-keep:] + [self.data[-1]] * (self.window - keep)
+        self.data.rotate(keep - len(self.data))
         self.plot.set_ydata(self.data)
 
     def min(self) -> float:

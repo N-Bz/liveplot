@@ -5,6 +5,9 @@ It was designed as a way to directly plot data from a live text log without requ
 
 By default, the Y axis is autoscaled based on the data found in the plots, and retains the min/max values even when no longer visible.
 
+# Requirements
+`liveplot` requires python3 (tested on 3.8), with the matplotlib module installed (available from PyPI)
+
 # Simple usages
 
 ## Space-separated values (SSV)
@@ -33,8 +36,8 @@ As such, if the value generator dumps line with the form `value = 1.234` calling
  - `-M`/`--max`: The initial maximum value of the Y axis
  - `--no-auto`: Disable the autoscale feature. When given, the `-m`/`--min` and `-M`/`--max` must also be present
  - `--no-auto-memory`: When set, this flag disables the memory part of the autoscaler, meaning that the min/max values of the graph will only be taken from the displayed data.
- - `--csv [separator]`: When set, the input is expected to be in CSV format. If the separator is given, it will be used instead of the normal `,`. In this mode, if the first line is composed of non-numeric values, it is expected to be the names of each column, and will be used as the labels for each plot.
- - `--columns [col1 [col2 [...]]]` : In SSV/CSV mode, all data are plotted by default. This argument restricts the plotted columns to the selected one (index starting at 1). It can be given multiple times to create multiple figures.
+ - `--csv [separator]`: When set, the input is expected to be in CSV format. If the separator is given, it will be used instead of the normal `,`.
+ - `--columns [col1 [col2 [...]]]` : All data are plotted by default. This argument restricts the plotted columns to the selected one (index starting at 1). It can be given multiple times to create multiple figures.
  - `-f`/`--filter`: Filter all inputs based on given regex. All lines not matching the filter regex will be discarded, other will have only the first capturing group passed to the plotters.
 
  # Examples
